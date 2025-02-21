@@ -1,0 +1,16 @@
+flask
+flask-cors
+werkzeug
+cassio
+pdfplumber
+langchain
+PyPDF2
+langchain_community
+langchain_google_genai
+google-api-python-client
+duckduckgo-search
+wikipedia
+arxiv
+sentence-transformers
+gunicorn
+faiss-cpu
