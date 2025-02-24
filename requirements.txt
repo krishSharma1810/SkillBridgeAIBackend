@@ -1,9 +1,10 @@
-flask
+=flask
 flask-cors
 werkzeug
 cassio
 pdfplumber
 langchain
+langchain_huggingface
 PyPDF2
 langchain_community
 langchain_google_genai

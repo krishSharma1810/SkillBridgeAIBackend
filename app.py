@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 import os
 import cassio
 import re
@@ -20,10 +20,12 @@ from googleapiclient.discovery import build
 from duckduckgo_search import DDGS
 import tempfile
 from dotenv import load_dotenv
+
+# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
 
 # API keys and configuration
 ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
@@ -61,8 +63,7 @@ def chunk_text(raw_text):
 def initialize_vector_store(text_chunks):
     global vector_store
     embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vector_store = Cassandra(embedding=embedding, table_name="QA_Mini_Demo", session=None,
-    keyspace=None)
+    vector_store = Cassandra(embedding=embedding, table_name="QA_Mini_Demo", session=None, keyspace=None)
     vector_store.clear()
     vector_store.add_texts(text_chunks)
     return VectorStoreIndexWrapper(vectorstore=vector_store)
@@ -94,121 +95,100 @@ tools = [
 
 agent_executor = initialize_agent(tools=tools, llm=llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True)
 
-# Learning request pattern check
-def is_learning_request(user_query):
-    learning_keywords = [
-        r"\blearn\b", r"\bstudy\b", r"\bresources\b", r"\bcourses\b",
-        r"\btutorials\b", r"\bguide\b", r"\bhow to\b", r"\bbest way to\b",
-        r"\bwhere can I\b", r"\bget started with\b"
-    ]
-    return any(re.search(keyword, user_query.lower()) for keyword in learning_keywords)
-
-# Query processing
-def query_with_learning_resources(vector_store_wrapper, user_query):
-    global chat_history
-    
-    # Search in PDF database
-    retrieved_docs = vector_store_wrapper.vectorstore.similarity_search(user_query, k=3)
-    combined_context = " ".join([doc.page_content for doc in retrieved_docs])
-    
-    chat_history_text = "\n".join(chat_history[-5:])
-    
-    system_prompt = (
-        "You are an AI tutor. Answer using the document first. "
-        "If the document lacks relevant information, search Wikipedia, ArXiv, DuckDuckGo. "
-        "If the user asks about learning resources, fetch blogs, YouTube videos, and online courses."
-    )
-    
-    # If the PDF contains a relevant answer
-    if retrieved_docs:
-        modified_query = f"{system_prompt}\n\nPrevious Conversations:\n{chat_history_text}\n\nDocument Context: {combined_context}\n\nUser's Question: {user_query}"
-        response = llm.invoke([{"role": "user", "content": modified_query}])
-        response_text = response.content if hasattr(response, 'content') else str(response)
-        source = "Document"
-        
-        # If PDF doesn't have the answer, trigger learning resources
-        if "does not contain information" in response_text or "I don't know" in response_text:
-            blog_articles = get_blog_articles(user_query)
-            youtube_videos = get_youtube_videos(user_query)
-            response_text = f"📖 **Recommended Articles:**\n{blog_articles}\n\n🎥 **YouTube Videos:**\n{youtube_videos}"
-            source = "Learning Resources"
-    
-    else:
-        response_text = agent_executor.run(user_query)
-        source = "External Tools"
-        
-        # If it's a learning-related query, fetch blogs & videos
-        if is_learning_request(user_query):
-            blog_articles = get_blog_articles(user_query)
-            youtube_videos = get_youtube_videos(user_query)
-            response_text += f"\n\n📖 **Recommended Articles:**\n{blog_articles}\n\n🎥 **YouTube Videos:**\n{youtube_videos}"
-            source = "Learning Resources"
-    
-    chat_history.append(f"User: {user_query}")
-    chat_history.append(f"AI ({source}): {response_text}")
-    
-    return response_text
-
 # API Routes
 @app.route('/upload', methods=['POST'])
+@cross_origin()
 def upload_pdf():
     global chat_history, vector_store
-    
+
     try:
         if 'file' not in request.files:
+            print("No file found in request")
             return jsonify({'error': 'No file part'}), 400
-        
+
         file = request.files['file']
+
         if file.filename == '':
+            print("No file selected")
             return jsonify({'error': 'No selected file'}), 400
-        
+
+        print(f"Received file: {file.filename}")
+
         # Reset chat history
         chat_history = []
-        
+
         # Process PDF
         raw_text = extract_text_from_pdf(file)
         if raw_text.startswith("Error:"):
             return jsonify({'error': raw_text}), 400
-        
+
         text_chunks = chunk_text(raw_text)
-        
+
         try:
             vector_store_wrapper = initialize_vector_store(text_chunks)
         except Exception as e:
+            print(f"Error initializing vector store: {str(e)}")
             return jsonify({'error': f'Error initializing vector store: {str(e)}'}), 500
-        
+
+        print("PDF successfully processed")
         return jsonify({'message': 'PDF uploaded and processed successfully'}), 200
-        
+
     except Exception as e:
         app.logger.error(f"Error processing upload: {str(e)}")
         return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
+
 @app.route('/query', methods=['POST'])
+@cross_origin()
 def query():
     global vector_store
-    
+
     if not vector_store:
         return jsonify({'error': 'Please upload a PDF first'}), 400
-    
+
     data = request.get_json()
     if not data or 'query' not in data:
         return jsonify({'error': 'No query provided'}), 400
-    
+
     user_query = data['query']
     vector_store_wrapper = VectorStoreIndexWrapper(vectorstore=vector_store)
     response = query_with_learning_resources(vector_store_wrapper, user_query)
-    
+
     return jsonify({'response': response}), 200
 
 @app.route('/history', methods=['GET'])
+@cross_origin()
 def get_history():
     global chat_history
     return jsonify({'history': chat_history}), 200
 
 @app.route('/clear', methods=['POST'])
+@cross_origin()
 def clear_history():
     global chat_history
     chat_history = []
     return jsonify({'message': 'Chat history cleared successfully'}), 200
+
+def query_with_learning_resources(vector_store_wrapper, user_query):
+    global chat_history
+
+    retrieved_docs = vector_store_wrapper.vectorstore.similarity_search(user_query, k=3)
+    combined_context = " ".join([doc.page_content for doc in retrieved_docs])
+    chat_history_text = "\n".join(chat_history[-5:])
+
+    system_prompt = (
+        "You are an AI tutor. Answer using the document first. "
+        "If the document lacks relevant information, search Wikipedia, ArXiv, DuckDuckGo."
+    )
+
+    if retrieved_docs:
+        response_text = llm.invoke([{"role": "user", "content": f"{system_prompt}\n{combined_context}\n{user_query}"}]).content
+    else:
+        response_text = agent_executor.run(user_query)
+
+    chat_history.append(f"User: {user_query}")
+    chat_history.append(f"AI: {response_text}")
+
+    return response_text
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
