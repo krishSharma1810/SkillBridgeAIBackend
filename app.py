@@ -19,7 +19,15 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from googleapiclient.discovery import build
 from duckduckgo_search import DDGS
 import tempfile
+
+import pytesseract
+from PIL import Image
+import filetype
+
+
 from dotenv import load_dotenv
+
+
 
 # Load environment variables
 load_dotenv()
@@ -94,6 +102,18 @@ tools = [
 ]
 
 agent_executor = initialize_agent(tools=tools, llm=llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True)
+
+
+# 🟢 Extract text from images using Tesseract OCR
+def extract_text_from_image(image_file):
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+        image_file.save(temp_file.name)  # Save uploaded image
+        image = Image.open(temp_file.name)  # Open image using PIL
+        extracted_text = pytesseract.image_to_string(image)  # OCR processing
+        os.unlink(temp_file.name)  # Delete temp file after extraction
+    return extracted_text if extracted_text.strip() else "Error: Could not extract text from Image."
+
+
 
 # API Routes
 @app.route('/upload', methods=['POST'])

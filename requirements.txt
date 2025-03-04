@@ -15,3 +15,5 @@ arxiv
 sentence-transformers
 gunicorn
 faiss-cpu
+pytesseract
+pillow
